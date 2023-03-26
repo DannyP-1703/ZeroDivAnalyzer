@@ -35,8 +35,8 @@ namespace ZeroDivAnalyzer
 
         private static void AnalyzeNode(SyntaxNodeAnalysisContext context)
         {
-            BinaryExpressionSyntax divideExpression = context.Node as BinaryExpressionSyntax;
-            ExpressionSyntax divisorNode = divideExpression.Right;
+            ExpressionSyntax divisorNode = ((BinaryExpressionSyntax)context.Node).Right;
+
             if (divisorNode.Kind() == SyntaxKind.ParenthesizedExpression)
             {
                 divisorNode = (ExpressionSyntax)divisorNode.ChildNodes().First();
@@ -44,10 +44,20 @@ namespace ZeroDivAnalyzer
 
             var diagnostic = Diagnostic.Create(Rule, context.Node.GetLocation(), divisorNode.ToString());
 
+            if (divisorNode.Kind() == SyntaxKind.InvocationExpression)
+            {
+                ISymbol method = context.SemanticModel.GetSymbolInfo(((InvocationExpressionSyntax)divisorNode).Expression).Symbol;
+                if (method.DeclaringSyntaxReferences != null && method.Kind == SymbolKind.Method)
+                {
+                    divisorNode = ((MethodDeclarationSyntax)method.DeclaringSyntaxReferences.First().GetSyntax()).DescendantNodes().OfType<ReturnStatementSyntax>().FirstOrDefault().Expression;
+                }
+            }
+
+
             switch (divisorNode.Kind())
             {
                 case SyntaxKind.NumericLiteralExpression:
-                    if (IsLiteralZero(divisorNode))
+                    if (IsLiteralZero(context, divisorNode))
                     {
                         context.ReportDiagnostic(diagnostic);
                         Console.WriteLine(diagnostic.ToString());
@@ -63,24 +73,7 @@ namespace ZeroDivAnalyzer
                     break;
 
                 case SyntaxKind.SubtractExpression:
-                    var leftNode = ((BinaryExpressionSyntax)divisorNode).Left;
-                    var rightNode = ((BinaryExpressionSyntax)divisorNode).Right;
-                    bool error = false;
-                    if (leftNode.Kind() == SyntaxKind.NumericLiteralExpression)
-                    {
-                        error = leftNode.ToString().Equals(rightNode.ToString());
-                    }
-                    if (leftNode.Kind() == SyntaxKind.IdentifierName)
-                    {
-                        var leftSymbol = context.SemanticModel.GetSymbolInfo(leftNode).Symbol;
-                        var rightSymbol = context.SemanticModel.GetSymbolInfo(rightNode).Symbol;
-                        if (leftSymbol.Kind == SymbolKind.Local || leftSymbol.Kind == SymbolKind.Field)
-                        {
-                            error = leftSymbol.Equals(rightSymbol, SymbolEqualityComparer.Default);
-                        }
-                    }
-
-                    if (error)
+                    if (IsSubExpressionZero(context, divisorNode))
                     {
                         context.ReportDiagnostic(diagnostic);
                         Console.WriteLine(diagnostic.ToString());
@@ -88,14 +81,7 @@ namespace ZeroDivAnalyzer
                     break;
 
                 case SyntaxKind.MultiplyExpression:
-                    leftNode = ((BinaryExpressionSyntax)divisorNode).Left;
-                    rightNode = ((BinaryExpressionSyntax)divisorNode).Right;
-                    error = leftNode.Kind() == SyntaxKind.NumericLiteralExpression && IsLiteralZero(leftNode)
-                            || rightNode.Kind() == SyntaxKind.NumericLiteralExpression && IsLiteralZero(rightNode)
-                            || leftNode.Kind() == SyntaxKind.IdentifierName && IsVarZero(context, leftNode)
-                            || rightNode.Kind() == SyntaxKind.IdentifierName && IsVarZero(context, rightNode);
-
-                    if (error)
+                    if (IsMulExpressionZero(context, divisorNode))
                     {
                         context.ReportDiagnostic(diagnostic);
                         Console.WriteLine(diagnostic.ToString());
@@ -104,15 +90,15 @@ namespace ZeroDivAnalyzer
             }
         }
 
-        private static bool IsLiteralZero(ExpressionSyntax divisor)
+        private static bool IsLiteralZero(SyntaxNodeAnalysisContext context, ExpressionSyntax divisor)
         {
-            SyntaxToken token = divisor.ChildTokens().First();
-            return token.Kind() == SyntaxKind.NumericLiteralToken && token.Value.ToString() == "0";
+            return divisor.Kind() == SyntaxKind.NumericLiteralExpression && (int)context.SemanticModel.GetConstantValue(divisor).Value == 0;
         }
 
         private static bool IsVarZero(SyntaxNodeAnalysisContext context, ExpressionSyntax divisor)
         {
             ISymbol variable = context.SemanticModel.GetSymbolInfo(divisor).Symbol;
+            
             if (variable.DeclaringSyntaxReferences != null && variable.Kind == SymbolKind.Local)
             {
                 VariableDeclaratorSyntax declarationNode = variable.DeclaringSyntaxReferences.First().GetSyntax() as VariableDeclaratorSyntax;
@@ -130,12 +116,11 @@ namespace ZeroDivAnalyzer
 
                 try
                 {
-                    DataFlowAnalysis dataFlowAnalysis = context.SemanticModel.AnalyzeDataFlow(declarationParent, divisorParent);
-
                     var declaratorExpressionSyntax = declarationNode.Initializer.Value;
+
                     if (declaratorExpressionSyntax.Kind() == SyntaxKind.NumericLiteralExpression
-                        && Int32.Parse(declaratorExpressionSyntax.ChildTokens().First().ValueText) == 0
-                        && !dataFlowAnalysis.WrittenInside.Contains(variable))
+                        && (int)context.SemanticModel.GetConstantValue(declaratorExpressionSyntax).Value == 0
+                        && !context.SemanticModel.AnalyzeDataFlow(declarationParent, divisorParent).WrittenInside.Contains(variable))
                     {
                         return true;
                     }
@@ -143,6 +128,35 @@ namespace ZeroDivAnalyzer
                 catch (ArgumentException) { return false; }
             }
             return false;
+        }
+
+        private static bool IsSubExpressionZero(SyntaxNodeAnalysisContext context, ExpressionSyntax divisor)
+        {
+            var leftNode = ((BinaryExpressionSyntax)divisor).Left;
+            var rightNode = ((BinaryExpressionSyntax)divisor).Right;
+            if (leftNode.Kind() == SyntaxKind.NumericLiteralExpression)
+            {
+                return leftNode.ToString().Equals(rightNode.ToString());
+            }
+            if (leftNode.Kind() == SyntaxKind.IdentifierName)
+            {
+                var leftSymbol = context.SemanticModel.GetSymbolInfo(leftNode).Symbol;
+                if (leftSymbol.Kind == SymbolKind.Local || leftSymbol.Kind == SymbolKind.Field || leftSymbol.Kind == SymbolKind.Parameter)
+                {
+                    return leftSymbol.Equals(context.SemanticModel.GetSymbolInfo(rightNode).Symbol, SymbolEqualityComparer.Default);
+                }
+            }
+            return false;
+        }
+
+        private static bool IsMulExpressionZero(SyntaxNodeAnalysisContext context, ExpressionSyntax divisor)
+        {
+            var leftNode = ((BinaryExpressionSyntax)divisor).Left;
+            var rightNode = ((BinaryExpressionSyntax)divisor).Right;
+            return leftNode.Kind() == SyntaxKind.NumericLiteralExpression && IsLiteralZero(context, leftNode)
+                    || rightNode.Kind() == SyntaxKind.NumericLiteralExpression && IsLiteralZero(context, rightNode)
+                    || leftNode.Kind() == SyntaxKind.IdentifierName && IsVarZero(context, leftNode)
+                    || rightNode.Kind() == SyntaxKind.IdentifierName && IsVarZero(context, rightNode);
         }
     }
 }

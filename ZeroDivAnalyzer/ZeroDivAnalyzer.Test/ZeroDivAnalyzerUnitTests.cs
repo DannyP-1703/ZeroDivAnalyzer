@@ -240,5 +240,111 @@ namespace ConsoleApplication1
     }";
             await VerifyCS.VerifyAnalyzerAsync(test);
         }
+
+        [TestMethod]
+        public async Task TestFuncLiteral()
+        {
+            var test = @"
+    using System;
+
+    namespace ConsoleApplication1
+    {
+        class Program
+        {   
+            private static int foo() 
+            { 
+                return 0; 
+            }
+
+            private static void Main(string[] args)
+            {
+                int a = 5;
+                Console.WriteLine([|a / Program.foo()|]);
+            }
+        }
+    }";
+            await VerifyCS.VerifyAnalyzerAsync(test);
+        }
+
+        [TestMethod]
+        public async Task TestFuncVar()
+        {
+            var test = @"
+    using System;
+
+    namespace ConsoleApplication1
+    {
+        class Program
+        {   
+            private static int foo(int a) 
+            { 
+                int value = 0;
+                Console.WriteLine(a);
+                return value; 
+            }
+
+            private static void Main(string[] args)
+            {
+                int a = 5;
+                Console.WriteLine([|a / Program.foo(a)|]);
+            }
+        }
+    }";
+            await VerifyCS.VerifyAnalyzerAsync(test);
+        }
+
+        [TestMethod]
+        public async Task TestFuncVar_NoDiagnostics()
+        {
+            var test = @"
+    using System;
+
+    namespace ConsoleApplication1
+    {
+        class Program
+        {   
+            private static int foo(int a) 
+            { 
+                int value = 0;
+                Console.WriteLine(value++ + a);
+                return value; 
+            }
+
+            private static void Main(string[] args)
+            {
+                int a = 5;
+                Console.WriteLine(a / Program.foo(a));
+            }
+        }
+    }";
+            await VerifyCS.VerifyAnalyzerAsync(test);
+        }
+
+        [TestMethod]
+        public async Task TestFuncExpression()
+        {
+            var test = @"
+    using System;
+
+    namespace ConsoleApplication1
+    {
+        class Program
+        {   
+            private static int foo(int a) 
+            { 
+                int value = 0;
+                Console.WriteLine(a);
+                return value * a; 
+            }
+
+            private static void Main(string[] args)
+            {
+                int a = 5;
+                Console.WriteLine([|a / Program.foo(a)|]);
+            }
+        }
+    }";
+            await VerifyCS.VerifyAnalyzerAsync(test);
+        }
     }
 }
