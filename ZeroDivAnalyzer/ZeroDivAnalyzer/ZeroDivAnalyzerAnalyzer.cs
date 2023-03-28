@@ -37,89 +37,86 @@ namespace ZeroDivAnalyzer
         {
             ExpressionSyntax divisorNode = ((BinaryExpressionSyntax)context.Node).Right;
 
-            if (divisorNode.Kind() == SyntaxKind.ParenthesizedExpression)
+            var visitedNodes = new HashSet<SyntaxNode>();
+
+            if (IsExpressionZero(context, divisorNode, visitedNodes))
             {
-                divisorNode = (ExpressionSyntax)divisorNode.ChildNodes().First();
+                var diagnostic = Diagnostic.Create(Rule, context.Node.GetLocation(), divisorNode.ToString());
+                context.ReportDiagnostic(diagnostic);
+                Console.WriteLine(diagnostic.ToString());
+            }
+        }
+
+        private static bool IsExpressionZero(SyntaxNodeAnalysisContext context, ExpressionSyntax divisor, HashSet<SyntaxNode> visitedNodes)
+        {
+            if (divisor.Kind() == SyntaxKind.ParenthesizedExpression)
+            {
+                divisor = (ExpressionSyntax)divisor.ChildNodes().First();
             }
 
-            var diagnostic = Diagnostic.Create(Rule, context.Node.GetLocation(), divisorNode.ToString());
-
-            if (divisorNode.Kind() == SyntaxKind.InvocationExpression)
+            if (visitedNodes.Contains(divisor))
             {
-                ISymbol method = context.SemanticModel.GetSymbolInfo(((InvocationExpressionSyntax)divisorNode).Expression).Symbol;
-                if (method.DeclaringSyntaxReferences != null && method.Kind == SymbolKind.Method)
-                {
-                    divisorNode = ((MethodDeclarationSyntax)method.DeclaringSyntaxReferences.First().GetSyntax()).DescendantNodes().OfType<ReturnStatementSyntax>().FirstOrDefault().Expression;
-                }
+                return false;
+            }
+            else
+            {
+                visitedNodes.Add(divisor);
             }
 
-
-            switch (divisorNode.Kind())
+            switch (divisor.Kind())
             {
                 case SyntaxKind.NumericLiteralExpression:
-                    if (IsLiteralZero(context, divisorNode))
-                    {
-                        context.ReportDiagnostic(diagnostic);
-                        Console.WriteLine(diagnostic.ToString());
-                    }
-                    break;
+                    return IsLiteralZero(context, divisor);
 
                 case SyntaxKind.IdentifierName:
-                    if (IsVarZero(context, divisorNode))
-                    {
-                        context.ReportDiagnostic(diagnostic);
-                        Console.WriteLine(diagnostic.ToString());
-                    }
-                    break;
+                    return IsVarZero(context, divisor, visitedNodes);
 
                 case SyntaxKind.SubtractExpression:
-                    if (IsSubExpressionZero(context, divisorNode))
-                    {
-                        context.ReportDiagnostic(diagnostic);
-                        Console.WriteLine(diagnostic.ToString());
-                    }
-                    break;
+                    return IsSubExpressionZero(context, divisor, visitedNodes);
 
                 case SyntaxKind.MultiplyExpression:
-                    if (IsMulExpressionZero(context, divisorNode))
+                    return IsMulExpressionZero(context, divisor, visitedNodes);
+
+                case SyntaxKind.InvocationExpression:
+                    ISymbol method = context.SemanticModel.GetSymbolInfo(((InvocationExpressionSyntax)divisor).Expression).Symbol;
+                    if (method.DeclaringSyntaxReferences != null && method.Kind == SymbolKind.Method)
                     {
-                        context.ReportDiagnostic(diagnostic);
-                        Console.WriteLine(diagnostic.ToString());
+                        foreach (var returnStatment in ((MethodDeclarationSyntax)method.DeclaringSyntaxReferences.First().GetSyntax()).DescendantNodes().OfType<ReturnStatementSyntax>())
+                        {
+                            if (IsExpressionZero(context, returnStatment.Expression, visitedNodes))
+                            {
+                                return true;
+                            }
+                        }
                     }
                     break;
             }
+            return false;
         }
 
         private static bool IsLiteralZero(SyntaxNodeAnalysisContext context, ExpressionSyntax divisor)
         {
-            return divisor.Kind() == SyntaxKind.NumericLiteralExpression && (int)context.SemanticModel.GetConstantValue(divisor).Value == 0;
+            var val = context.SemanticModel.GetConstantValue(divisor);
+            return val.HasValue && val.Value.Equals(Convert.ChangeType(0, val.Value.GetType()));
         }
 
-        private static bool IsVarZero(SyntaxNodeAnalysisContext context, ExpressionSyntax divisor)
+        private static bool IsVarZero(SyntaxNodeAnalysisContext context, ExpressionSyntax divisor, HashSet<SyntaxNode> visitedNodes)
         {
             ISymbol variable = context.SemanticModel.GetSymbolInfo(divisor).Symbol;
-            
-            if (variable.DeclaringSyntaxReferences != null && variable.Kind == SymbolKind.Local)
+            if (variable.DeclaringSyntaxReferences != null)
             {
                 VariableDeclaratorSyntax declarationNode = variable.DeclaringSyntaxReferences.First().GetSyntax() as VariableDeclaratorSyntax;
+                if (declarationNode == null)
+                {
+                    return false;
+                }
 
-                SyntaxNode declarationParent = declarationNode.GetLastToken().GetNextToken().GetNextToken().Parent;
-                SyntaxNode divisorParent = divisor;
-                while (!(declarationParent is StatementSyntax))
-                {
-                    declarationParent = declarationParent.Parent;
-                }
-                while (!(divisorParent is StatementSyntax))
-                {
-                    divisorParent = divisorParent.Parent;
-                }
+                SyntaxNode declarationParent = declarationNode.GetLastToken().GetNextToken().GetNextToken().Parent.FirstAncestorOrSelf<StatementSyntax>();
+                SyntaxNode divisorParent = divisor.FirstAncestorOrSelf<StatementSyntax>(syntax => syntax.Parent.Equals(declarationParent.Parent));
 
                 try
                 {
-                    var declaratorExpressionSyntax = declarationNode.Initializer.Value;
-
-                    if (declaratorExpressionSyntax.Kind() == SyntaxKind.NumericLiteralExpression
-                        && (int)context.SemanticModel.GetConstantValue(declaratorExpressionSyntax).Value == 0
+                    if (IsExpressionZero(context, declarationNode.Initializer.Value, visitedNodes)
                         && !context.SemanticModel.AnalyzeDataFlow(declarationParent, divisorParent).WrittenInside.Contains(variable))
                     {
                         return true;
@@ -130,7 +127,7 @@ namespace ZeroDivAnalyzer
             return false;
         }
 
-        private static bool IsSubExpressionZero(SyntaxNodeAnalysisContext context, ExpressionSyntax divisor)
+        private static bool IsSubExpressionZero(SyntaxNodeAnalysisContext context, ExpressionSyntax divisor, HashSet<SyntaxNode> visitedNodes)
         {
             var leftNode = ((BinaryExpressionSyntax)divisor).Left;
             var rightNode = ((BinaryExpressionSyntax)divisor).Right;
@@ -149,14 +146,14 @@ namespace ZeroDivAnalyzer
             return false;
         }
 
-        private static bool IsMulExpressionZero(SyntaxNodeAnalysisContext context, ExpressionSyntax divisor)
+        private static bool IsMulExpressionZero(SyntaxNodeAnalysisContext context, ExpressionSyntax divisor, HashSet<SyntaxNode> visitedNodes)
         {
             var leftNode = ((BinaryExpressionSyntax)divisor).Left;
             var rightNode = ((BinaryExpressionSyntax)divisor).Right;
             return leftNode.Kind() == SyntaxKind.NumericLiteralExpression && IsLiteralZero(context, leftNode)
                     || rightNode.Kind() == SyntaxKind.NumericLiteralExpression && IsLiteralZero(context, rightNode)
-                    || leftNode.Kind() == SyntaxKind.IdentifierName && IsVarZero(context, leftNode)
-                    || rightNode.Kind() == SyntaxKind.IdentifierName && IsVarZero(context, rightNode);
+                    || leftNode.Kind() == SyntaxKind.IdentifierName && IsVarZero(context, leftNode, visitedNodes)
+                    || rightNode.Kind() == SyntaxKind.IdentifierName && IsVarZero(context, rightNode, visitedNodes);
         }
     }
 }

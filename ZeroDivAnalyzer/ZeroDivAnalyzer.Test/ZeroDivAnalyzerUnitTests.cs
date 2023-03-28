@@ -34,10 +34,10 @@ namespace ConsoleApplication1
     {
         class Program
         {   
-            int a = {|CS0020:(35 + 89) / 0|};
+            int a = {|CS0020:(35 + 89) / 0.0m|};
         }
     }";
-            var expected = VerifyCS.Diagnostic("ZeroDivAnalyzer").WithSpan(6, 21, 6, 34).WithArguments("0");
+            var expected = VerifyCS.Diagnostic("ZeroDivAnalyzer").WithSpan(6, 21, 6, 37).WithArguments("0.0m");
             await VerifyCS.VerifyAnalyzerAsync(test, expected);
         }
 
@@ -106,7 +106,7 @@ namespace ConsoleApplication1
             }
         }
     }";
-            var expected = VerifyCS.Diagnostic("ZeroDivAnalyzer").WithSpan(10, 35, 10, 57).WithArguments("5 - 5");
+            var expected = VerifyCS.Diagnostic("ZeroDivAnalyzer").WithSpan(10, 35, 10, 57).WithArguments("(5 - 5)");
             await VerifyCS.VerifyAnalyzerAsync(test, expected);
         }
 
@@ -334,13 +334,122 @@ namespace ConsoleApplication1
             { 
                 int value = 0;
                 Console.WriteLine(a);
-                return value * a; 
+                return a * value; 
             }
 
             private static void Main(string[] args)
             {
                 int a = 5;
                 Console.WriteLine([|a / Program.foo(a)|]);
+            }
+        }
+    }";
+            await VerifyCS.VerifyAnalyzerAsync(test);
+        }
+
+        [TestMethod]
+        public async Task TestFuncAssigned()
+        {
+            var test = @"
+    using System;
+
+    namespace ConsoleApplication1
+    {
+        class Program
+        {   
+            private static double foo(double a) 
+            { 
+                double value = 0.0;
+                a += 1;
+                double smthn = value;
+                for (int i = 0; i < 6; ++i)
+                {
+                    Console.WriteLine(a);
+                    if (i == a)
+                    {
+                        return a; 
+                    }
+                }
+                return smthn * a;
+            }
+
+            private static void Main(string[] args)
+            {
+                double a = 5.0;
+                double b = Program.foo(a);
+                Console.WriteLine([|a / b|]);
+            }
+        }
+    }";
+            await VerifyCS.VerifyAnalyzerAsync(test);
+        }
+
+        [TestMethod]
+        public async Task TestFuncSeveralReturns()
+        {
+            var test = @"
+    using System;
+
+    namespace ConsoleApplication1
+    {
+        class Program
+        {   
+            private static int foo(int a) 
+            { 
+                int val = 10;
+                switch(a)
+                {
+                   case 1:
+                        return val;
+                   case 2:
+                        return val * val;
+                   case 3:
+                        return 0;
+                   default:
+                        return 1;
+                }
+            }
+
+            private static void Main(string[] args)
+            {
+                Console.WriteLine([|5 / foo(6)|]);
+            }
+        }
+    }";
+            await VerifyCS.VerifyAnalyzerAsync(test);
+        }
+
+        [TestMethod]
+        public async Task TestRecursion()
+        {
+            var test = @"
+    using System;
+
+    namespace ConsoleApplication1
+    {
+        class Program
+        {   
+            private static double foo(double a) 
+            { 
+                double value = 0.0;
+                a++;
+                double smthn = value;
+                for (int i = 0; i < 6; ++i)
+                {
+                    Console.WriteLine(a);
+                    if (i == a)
+                    {
+                        return foo(smthn);
+                    }
+                }
+                return smthn;
+            }
+
+            private static void Main(string[] args)
+            {
+                double a = 5.0;
+                double b = Program.foo(a);
+                Console.WriteLine([|a / b|]);
             }
         }
     }";

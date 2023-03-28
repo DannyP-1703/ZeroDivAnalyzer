@@ -70,7 +70,7 @@ namespace ZeroDivAnalyzer {
         }
         
         /// <summary>
-        ///   Ищет локализованную строку, похожую на Division by expression &quot;{0}&quot; that equals zero..
+        ///   Ищет локализованную строку, похожую на Division by expression &quot;{0}&quot; that might be equal to zero..
         /// </summary>
         internal static string AnalyzerMessageFormat {
             get {
